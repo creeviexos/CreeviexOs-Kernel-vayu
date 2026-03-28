@@ -1,0 +1,11 @@
+*.o
+*.a
+*.s
+*.ko
+*.cmd
+*.d
+*.tmp
+.tmp_versions/
+modules.order
+Module.symvers
+/out/
