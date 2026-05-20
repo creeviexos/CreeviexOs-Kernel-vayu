@@ -1992,9 +1992,10 @@ static int ngd_slim_probe(struct platform_device *pdev)
 
 	init_completion(&dev->qmi.qmi_comp);
 	dev->err = -EPROBE_DEFER;
-	pm_runtime_use_autosuspend(dev->dev);
-	pm_runtime_set_autosuspend_delay(dev->dev, MSM_SLIM_AUTOSUSPEND);
-	pm_runtime_set_suspended(dev->dev);
+	/* CREEVIEX FIX: disable runtime PM autosuspend on SLIMbus controller.
+	 * Fixes WCD9340 probe -ENXIO (-6) -> dead audio after reboot on AOSP ROMs.
+	 */
+	pm_runtime_set_active(dev->dev);
 	pm_runtime_enable(dev->dev);
 
 	if (slim_mdm) {
