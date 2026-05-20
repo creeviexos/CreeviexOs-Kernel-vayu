@@ -1,95 +1,48 @@
-name: Build Kernel & Release
-
+name: Build Kernel
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
-    inputs:
-      release_tag:
-        description: 'Release tag (e.g. v1.0)'
-        required: true
-      changelog:
-        description: 'Changelog for the release'
-        required: false
-
 jobs:
   build:
-    runs-on: ubuntu-latest
-
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
     steps:
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bc bison build-essential ccache curl flex \
-            g++-multilib gcc-multilib git gnupg gperf libfuse-dev libncurses5-dev \
-            libelf-dev liblz4-tool libsdl1.2-dev libssl-dev libxml2 \
-            libxml2-utils lzop pngcrush rsync schedtool squashfs-tools \
-            xsltproc zip zlib1g-dev python3 perl cpio kmod \
-            binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi
-
-      - name: Checkout kernel source
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 1
-
-      - name: Shorten source path
+      - name: Install deps
         run: |
-          # Move source to a short path to avoid "Argument list too long" errors
-          # from qcacld-3.0's extremely long compiler command lines
-          sudo mv "$GITHUB_WORKSPACE" /k
-          sudo ln -s /k "$GITHUB_WORKSPACE"
-
-      - name: Enable ThinLTO in defconfig
-        working-directory: /k
-        run: |
-          if [[ "$GITHUB_REF_NAME" == "nethunter" ]]; then
-            DEFCONFIG="nethunter_defconfig"
-          else
-            DEFCONFIG="vayu_user_defconfig"
-          fi
-          sed -i 's/# CONFIG_THINLTO is not set/CONFIG_THINLTO=y/' "arch/arm64/configs/$DEFCONFIG"
-
+          sudo apt update
+          sudo apt install -y bc bison flex libssl-dev libelf-dev \
+            python3 zip unzip wget kmod cpio device-tree-compiler \
+            ccache lld llvm clang gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
       - name: Build kernel
-        working-directory: /k
         run: |
-          chmod +x build.sh
-          bash build.sh "${{ github.event.inputs.release_tag }}"
-
-      - name: Find artifacts
-        id: artifacts
-        working-directory: /k
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export KBUILD_BUILD_USER=creeviex
+          export KBUILD_BUILD_HOST=github-ci
+          make O=out ARCH=arm64 vayu_defconfig
+          make -j$(nproc) O=out ARCH=arm64 \
+            CC=clang LD=ld.lld \
+            AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy \
+            OBJDUMP=llvm-objdump STRIP=llvm-strip \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            Image.gz-dtb 2>&1 | tee build.log
+      - name: Package AnyKernel3
         run: |
-          ZIPS=$(find . -maxdepth 1 -name 'CrDroid-*.zip' -printf '%f\n')
-          if [ -z "$ZIPS" ]; then
-            echo "::error::No kernel zip found!"
-            exit 1
-          fi
-          echo "Found artifacts:"
-          echo "$ZIPS"
-
-      - name: Check if tag exists
-        working-directory: /k
-        id: check_tag
-        run: |
-          if git ls-remote --tags origin | grep -q "refs/tags/${{ github.event.inputs.release_tag }}$"; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Create tag (if needed)
-        working-directory: /k
-        if: steps.check_tag.outputs.exists == 'false'
-        run: |
-          git tag "${{ github.event.inputs.release_tag }}"
-          git push origin "${{ github.event.inputs.release_tag }}"
-
-      - name: Create release & upload artifacts
-        uses: softprops/action-gh-release@v2
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3 ak3
+          cp out/arch/arm64/boot/Image.gz-dtb ak3/ 2>/dev/null || cp out/arch/arm64/boot/Image.gz ak3/
+          find out/arch/arm64/boot/dts -name "*.dtb" -exec cp {} ak3/ \; 2>/dev/null || true
+          cd ak3 && zip -r9 ../kernel-AUDIO-FIX.zip * -x .git
+      - uses: actions/upload-artifact@v4
         with:
-          tag_name: ${{ github.event.inputs.release_tag }}
-          name: ${{ github.event.inputs.release_tag }}
-          body: ${{ github.event.inputs.changelog }}
-          generate_release_notes: ${{ github.event.inputs.changelog == '' }}
-          files: |
-            /k/CrDroid-*.zip
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: CreeviexOs-Kernel-AUDIO-FIX
+          path: kernel-AUDIO-FIX.zip
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
